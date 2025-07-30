@@ -6,6 +6,10 @@
 static const char *s_lsn = "tls://localhost:8765";   // Listening address
 static const char *s_conn = "tls://localhost:8765";  // Connect to address
 
+struct mg_str ss_ca;
+struct mg_str ss_server;
+struct mg_str ss_client;
+
 // client resources
 static struct c_res_s {
   int i;
@@ -14,15 +18,17 @@ static struct c_res_s {
 
 // CLIENT event handler
 static void cfn(struct mg_connection *c, int ev, void *ev_data) {
-  int *i = &((struct c_res_s *) c->fn_data)->i;
+  int *i = &((struct c_res_s *)c->fn_data)->i;
   if (ev == MG_EV_OPEN) {
     MG_INFO(("CLIENT has been initialized"));
   } else if (ev == MG_EV_CONNECT) {
     MG_INFO(("CLIENT connected"));
     if (mg_url_is_ssl(s_conn)) {
-      struct mg_tls_opts opts = {.ca = mg_unpacked("/certs/ss_ca.pem"),
-                                 .cert = mg_unpacked("/certs/ss_client.pem"),
-                                 .key = mg_unpacked("/certs/ss_client.pem")};
+      struct mg_tls_opts opts = {
+          .ca = ss_ca,
+          // .cert = ss_client,
+          // .key = ss_client
+      };
       mg_tls_init(c, &opts);
     }
     *i = 1;  // do something
@@ -33,13 +39,10 @@ static void cfn(struct mg_connection *c, int ev, void *ev_data) {
   } else if (ev == MG_EV_CLOSE) {
     MG_INFO(("CLIENT disconnected"));
     // signal we are done
-    ((struct c_res_s *) c->fn_data)->c = NULL;
+    ((struct c_res_s *)c->fn_data)->c = NULL;
   } else if (ev == MG_EV_ERROR) {
-    MG_INFO(("CLIENT error: %s", (char *) ev_data));
-  } else if (ev == MG_EV_TLS_HS) {
-    MG_INFO(("TLS handshake done! Sending EHLO again"));
-    mg_printf(c, "EHLO myname\r\n");
-  }else if (ev == MG_EV_POLL && *i != 0) {
+    MG_INFO(("CLIENT error: %s", (char *)ev_data));
+  } else if (ev == MG_EV_POLL && *i != 0) {
     switch ((*i)++) {
       case 50:  // 50 x 100ms = 5s
         mg_send(c, "Hi, there", 9);
@@ -60,9 +63,9 @@ static void sfn(struct mg_connection *c, int ev, void *ev_data) {
   } else if (ev == MG_EV_ACCEPT) {
     MG_INFO(("SERVER accepted a connection"));
     if (mg_url_is_ssl(s_lsn)) {
-      struct mg_tls_opts opts = {.ca = mg_unpacked("/certs/ss_ca.pem"),
-                                 .cert = mg_unpacked("/certs/ss_server.pem"),
-                                 .key = mg_unpacked("/certs/ss_server.pem")};
+      struct mg_tls_opts opts = {//.ca = ss_ca,
+                                 .cert = ss_server,
+                                 .key = ss_server};
       mg_tls_init(c, &opts);
     }
   } else if (ev == MG_EV_READ) {
@@ -73,13 +76,13 @@ static void sfn(struct mg_connection *c, int ev, void *ev_data) {
   } else if (ev == MG_EV_CLOSE) {
     MG_INFO(("SERVER disconnected"));
   } else if (ev == MG_EV_ERROR) {
-    MG_INFO(("SERVER error: %s", (char *) ev_data));
+    MG_INFO(("SERVER error: %s", (char *)ev_data));
   }
 }
 
 // Timer function - recreate client connection if it is closed
 static void timer_fn(void *arg) {
-  struct mg_mgr *mgr = (struct mg_mgr *) arg;
+  struct mg_mgr *mgr = (struct mg_mgr *)arg;
   if (c_res.c == NULL) {
     c_res.i = 0;
     c_res.c = mg_connect(mgr, s_conn, cfn, &c_res);
@@ -91,10 +94,14 @@ int main(void) {
   struct mg_mgr mgr;  // Event manager
   struct mg_connection *c;
 
+  ss_ca = mg_file_read(&mg_fs_posix, "certs/ss_ca.pem");
+  ss_server = mg_file_read(&mg_fs_posix, "certs/ss_server.pem");
+  ss_client = mg_file_read(&mg_fs_posix, "certs/ss_client.pem");
+
   mg_log_set(MG_LL_INFO);  // Set log level
   mg_mgr_init(&mgr);       // Initialize event manager
 
-  mg_timer_add(&mgr, 1500, MG_TIMER_REPEAT | MG_TIMER_RUN_NOW, timer_fn, &mgr);
+  mg_timer_add(&mgr, 15000, MG_TIMER_REPEAT | MG_TIMER_RUN_NOW, timer_fn, &mgr);
   c = mg_listen(&mgr, s_lsn, sfn, NULL);  // Create server connection
   if (c == NULL) {
     MG_INFO(("SERVER cant' open a connection"));
@@ -103,6 +110,9 @@ int main(void) {
   while (true)
     mg_mgr_poll(&mgr, 100);  // Infinite event loop, blocks for upto 100ms
                              // unless there is network activity
-  mg_mgr_free(&mgr);         // Free resources
+  mg_free(&ss_ca);
+  mg_free(&ss_client);
+  mg_free(&ss_server);
+  mg_mgr_free(&mgr);  // Free resources
   return 0;
 }

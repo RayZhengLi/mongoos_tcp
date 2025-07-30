@@ -7,7 +7,10 @@
 
 #define MAX_MSG_LEN 256
 #define QUEUE_SIZE 16
-static const char *s_conn = "tls://127.0.0.1:9000";
+static const char *s_conn = "tls://localhost:8765";
+
+struct mg_str ss_ca;
+struct mg_str ss_client;
 
 typedef struct {
   char msg[MAX_MSG_LEN];
@@ -33,6 +36,9 @@ static int want_close = 0;
 static struct {
   struct mg_connection *c;
 } c_res;
+
+// 用于储存CA信息
+struct mg_str ca;
 
 // 生产者线程：从stdin读入消息到队列
 void *input(void *arg) {
@@ -88,7 +94,9 @@ static void cfn(struct mg_connection *c, int ev, void *ev_data) {
     MG_INFO(("CLIENT connected"));
     if (mg_url_is_ssl(s_conn)) {
       struct mg_tls_opts opts = {0};
-      opts.ca = mg_unpacked("/cert/ss_ca.pem");
+      opts.ca = ca;
+      // opts.cert = ss_client;
+      // opts.key = ss_client;
       mg_tls_init(c, &opts);
     }
     c_res.c = c;
@@ -137,25 +145,28 @@ static void timer_fn(void *arg) {
 }
 
 // Periodic send function
-// static void periodic_send(void *arg) {
-//   (void)arg;
-//   char buf[MAX_MSG_LEN];
-//   static int index = 0;
-//   index++;
-//   sprintf(buf, "This is the %ld periodic message!\n", mg_millis());
-//   pthread_mutex_lock(&send_buf.lock);
-//   int next = (send_buf.head + 1) % QUEUE_SIZE;
-//   if (next != send_buf.tail) {  // 环形队列未满
-//     strncpy(send_buf.queue[send_buf.head].msg, buf, MAX_MSG_LEN - 1);
-//     send_buf.queue[send_buf.head].msg[MAX_MSG_LEN - 1] = 0;
-//     send_buf.head = next;
-//   }
-//   pthread_mutex_unlock(&send_buf.lock);
-// }
+static void periodic_send(void *arg) {
+  (void)arg;
+  char buf[MAX_MSG_LEN];
+  static int index = 0;
+  index++;
+  sprintf(buf, "This is the %ld periodic message!\n", mg_millis());
+  pthread_mutex_lock(&send_buf.lock);
+  int next = (send_buf.head + 1) % QUEUE_SIZE;
+  if (next != send_buf.tail) {  // 环形队列未满
+    strncpy(send_buf.queue[send_buf.head].msg, buf, MAX_MSG_LEN - 1);
+    send_buf.queue[send_buf.head].msg[MAX_MSG_LEN - 1] = 0;
+    send_buf.head = next;
+  }
+  pthread_mutex_unlock(&send_buf.lock);
+}
 
 int main(void) {
   struct mg_mgr mgr;
   mg_mgr_init(&mgr);
+
+  ss_ca = mg_file_read(&mg_fs_posix, "certs/ss_ca.pem");
+  ss_client = mg_file_read(&mg_fs_posix, "certs/ss_client.pem");
 
   c_res.c = mg_connect(&mgr, s_conn, cfn, &c_res);
   if (!c_res.c) {
@@ -170,8 +181,8 @@ int main(void) {
   pthread_create(&proc_tid, NULL, process, NULL);
 
   mg_timer_add(&mgr, 1000, MG_TIMER_REPEAT | MG_TIMER_RUN_NOW, timer_fn, &mgr);
-  // mg_timer_add(&mgr, 1000, MG_TIMER_REPEAT | MG_TIMER_RUN_NOW, periodic_send,
-  //              NULL);
+  mg_timer_add(&mgr, 1000, MG_TIMER_REPEAT | MG_TIMER_RUN_NOW, periodic_send,
+               NULL);
 
   while (!want_close || c_res.c != NULL) mg_mgr_poll(&mgr, 100);
 
@@ -181,5 +192,6 @@ int main(void) {
   sem_destroy(&recv_sem);
   mg_mgr_free(&mgr);
   printf("Bye.\n");
+  mg_free(ca.buf);
   return 0;
 }

@@ -1,39 +1,41 @@
-PROG ?= example                   # Program we are building
-PACK ?= ./pack                    # Packing executable
-DELETE = rm -rf                   # Command to remove files
-OUT ?= -o $(PROG)                 # Compiler argument for output file
-SOURCES = tcp_server.c mongoose.c packed_fs.c       # Source code files
-CFLAGS = -W -Wall -Wextra -g -I.  # Build options
+# 可切换主程序（默认 tcp_client, 仅用于 all: 目标）
+PROG ?= tcp_client
 
-# Mongoose build options. See https://mongoose.ws/documentation/#build-options
-CFLAGS_MONGOOSE += -DMG_ENABLE_PACKED_FS=1
+# 通用设置
+DELETE = rm -rf
+OUT = -o
+CFLAGS = -W -Wall -Wextra -g -I.
+LIBS = -lssl -lcrypto -ldl -lpthread
+CFLAGS_MONGOOSE = -DMG_ENABLE_PACKED_FS=0 -DMG_TLS=MG_TLS_OPENSSL
 
-ifeq ($(OS),Windows_NT)   # Windows settings. Assume MinGW compiler. To use VC: make CC=cl CFLAGS=/MD OUT=/Feprog.exe
-  PROG ?= example.exe           # Use .exe suffix for the binary
-  PACK = pack.exe               # Packing executable
-  CC = gcc                      # Use MinGW gcc compiler
-  CFLAGS += -lws2_32            # Link against Winsock library
-  DELETE = cmd /C del /Q /F /S  # Command prompt command to delete files
-  OUT ?= -o $(PROG)             # Build output
-  MAKE += WINDOWS=1 CC=$(CC)
-endif
+# 源码文件
+SRCS_SERVER = tcp_server.c mongoose.c
+SRCS_CLIENT = tcp_client.c mongoose.c
 
-all: $(PROG)              # Default target. Build and run program
-	$(RUN) ./$(PROG) $(ARGS)
+# 目标名
+TARGETS = tcp_server tcp_client
 
-$(PROG): $(SOURCES)       # Build program from sources
-	$(CC) $(SOURCES) $(CFLAGS) $(CFLAGS_MONGOOSE) $(CFLAGS_EXTRA) $(OUT)
+.PHONY: all clean run_server run_client
 
-clean:                    # Cleanup. Delete built program and all build artifacts
-	$(DELETE) $(PROG) *.o *.obj *.exe *.dSYM mbedtls $(PACK)
+all: $(PROG)        # 默认只编译 PROG（可用 make PROG=tcp_server）
 
-# Generate packed filesystem for serving credentials
-packed_fs.c: $(wildcard certs/*) Makefile
-	$(CC) ../../../test/pack.c -o $(PACK)
-	$(PACK) $(wildcard certs/*) > $@
+# 编译目标
+tcp_server: $(SRCS_SERVER)
+	$(CC) $(SRCS_SERVER) $(CFLAGS) $(CFLAGS_MONGOOSE) $(LIBS) $(OUT) tcp_server
 
-# see https://mongoose.ws/tutorials/tls/#how-to-build for TLS build options
+tcp_client: $(SRCS_CLIENT)
+	$(CC) $(SRCS_CLIENT) $(CFLAGS) $(CFLAGS_MONGOOSE) $(LIBS) $(OUT) tcp_client
 
-mbedtls:                  # Pull and build mbedTLS library
-	git clone --depth 1 -b v2.28.2 https://github.com/mbed-tls/mbedtls $@
-	$(MAKE) -C mbedtls/library
+# 一次性全编译
+build_all: tcp_server tcp_client
+
+# 运行
+run_server: tcp_server
+	./tcp_server
+
+run_client: tcp_client
+	./tcp_client
+
+# 清理
+clean:
+	$(DELETE) $(TARGETS) *.o *.obj *.exe *.dSYM
