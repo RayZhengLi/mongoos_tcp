@@ -6,9 +6,14 @@
 static const char *s_lsn = "tls://localhost:8765";   // Listening address
 static const char *s_conn = "tls://localhost:8765";  // Connect to address
 
+#ifdef USING_OPENSSL
 struct mg_str ss_ca;
 struct mg_str ss_server;
 struct mg_str ss_client;
+#else
+static struct mg_str s_ca, s_srv_cert, s_srv_key;
+static struct mg_str s_cli_cert, s_cli_key;
+#endif
 
 // client resources
 static struct c_res_s {
@@ -25,7 +30,12 @@ static void cfn(struct mg_connection *c, int ev, void *ev_data) {
     MG_INFO(("CLIENT connected"));
     if (mg_url_is_ssl(s_conn)) {
       struct mg_tls_opts opts = {
+        #ifdef USING_OPENSSL
           .ca = ss_ca,
+        #else
+          .ca = s_ca,
+          .name = mg_str("localhost")
+        #endif
           // .cert = ss_client,
           // .key = ss_client
       };
@@ -64,8 +74,14 @@ static void sfn(struct mg_connection *c, int ev, void *ev_data) {
     MG_INFO(("SERVER accepted a connection"));
     if (mg_url_is_ssl(s_lsn)) {
       struct mg_tls_opts opts = {//.ca = ss_ca,
+                                #ifdef USING_OPENSSL
                                  .cert = ss_server,
-                                 .key = ss_server};
+                                 .key  = ss_server
+                                #else
+                                 .cert = s_srv_cert,
+                                 .key  = s_srv_key
+                                #endif
+                                };
       mg_tls_init(c, &opts);
     }
   } else if (ev == MG_EV_READ) {
@@ -94,9 +110,19 @@ int main(void) {
   struct mg_mgr mgr;  // Event manager
   struct mg_connection *c;
 
-  ss_ca = mg_file_read(&mg_fs_posix, "certs/ss_ca.pem");
-  ss_server = mg_file_read(&mg_fs_posix, "certs/ss_server.pem");
-  ss_client = mg_file_read(&mg_fs_posix, "certs/ss_client.pem");
+#ifdef USING_OPENSSL
+  // // Using openSSL
+  // ss_ca = mg_file_read(&mg_fs_posix, "certs/ss_ca.pem");
+  // ss_server = mg_file_read(&mg_fs_posix, "certs/ss_server.pem");
+  // ss_client = mg_file_read(&mg_fs_posix, "certs/ss_client.pem");
+#else
+  // Using built-in TSL
+  s_ca       = mg_file_read(&mg_fs_posix, "certs/new/ca.crt");
+  s_srv_cert = mg_file_read(&mg_fs_posix, "certs/new/server.crt");
+  s_srv_key  = mg_file_read(&mg_fs_posix, "certs/new/server.key");
+  s_cli_cert = mg_file_read(&mg_fs_posix, "certs/new/client.crt");   // 仅在双向TLS需要
+  s_cli_key  = mg_file_read(&mg_fs_posix, "certs/new/client.key");   // 仅在双向TLS需要
+#endif
 
   mg_log_set(MG_LL_INFO);  // Set log level
   mg_mgr_init(&mgr);       // Initialize event manager
@@ -110,9 +136,19 @@ int main(void) {
   while (true)
     mg_mgr_poll(&mgr, 100);  // Infinite event loop, blocks for upto 100ms
                              // unless there is network activity
+
+#ifdef USING_OPENSSL
   mg_free(&ss_ca);
   mg_free(&ss_client);
   mg_free(&ss_server);
+#else
+  mg_free((void*)s_ca.buf);
+  mg_free((void*)s_srv_cert.buf);
+  mg_free((void*)s_srv_key.buf);
+  mg_free((void*)s_cli_cert.buf);
+  mg_free((void*)s_cli_key.buf);
+#endif
+
   mg_mgr_free(&mgr);  // Free resources
   return 0;
 }
